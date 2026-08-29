@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import tempfile
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ KINDS = ("allow", "ask", "deny")
 MAX_SOURCE_BYTES = 1_048_576
 MAX_RECEIPT_BYTES = 4_194_304
 MAX_RULES = 1_000
+_WINDOWS_REPARSE_POINT = 0x400
 
 
 class ReceiptError(Exception):
@@ -68,9 +70,9 @@ class Entry:
             host=str(data["host"]),
             scope=str(data["scope"]),
             kind=str(data["kind"]),
-            source=str(data["source"]),
-            locator=str(data["locator"]),
-            display=str(data["rule"]),
+            source=safe_display(str(data["source"])),
+            locator=safe_display(str(data["locator"])),
+            display=safe_display(str(data["rule"])),
             fingerprint=str(data["fingerprint"]),
         )
 
@@ -151,10 +153,44 @@ def safe_display(value: str, limit: int = 320) -> str:
             escaped.append(r"\t")
         elif code < 32 or code == 127:
             escaped.append(f"\\x{code:02x}")
+        elif unicodedata.category(char) in {"Cc", "Cf"}:
+            escaped.append(f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}")
         else:
             escaped.append(char)
     result = "".join(escaped)
     return result if len(result) <= limit else result[: limit - 1] + "…"
+
+
+def _guard_source_path(path: Path, anchor: Path, label: str) -> None:
+    """Refuse source paths redirected outside their declared settings scope."""
+    anchor = anchor.resolve()
+    candidate = path.absolute()
+    try:
+        relative = candidate.relative_to(anchor)
+    except ValueError as exc:
+        raise ReceiptError(f"source is outside its settings scope: {safe_display(label)}") from exc
+
+    current = anchor
+    for part in relative.parts:
+        current /= part
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ReceiptError(
+                f"cannot inspect source path {safe_display(label)}: {exc.__class__.__name__}"
+            ) from exc
+        if current.is_symlink() or (
+            os.name == "nt"
+            and getattr(metadata, "st_file_attributes", 0) & _WINDOWS_REPARSE_POINT
+        ):
+            raise ReceiptError(f"refusing redirected source path {safe_display(label)}")
+
+    try:
+        candidate.resolve().relative_to(anchor)
+    except (OSError, ValueError) as exc:
+        raise ReceiptError(f"source resolves outside its settings scope: {safe_display(label)}") from exc
 
 
 def _entry(
@@ -251,6 +287,7 @@ def parse_claude_settings(text: str, scope: str, source: str, salt: bytes) -> li
 
 
 _PREFIX_START = re.compile(r"(?m)^[ \t]*prefix_rule[ \t]*\(")
+_PREFIX_TOKEN = re.compile(r"(?m)^[ \t]*prefix_rule\b")
 
 
 def _call_end(text: str, open_index: int, source: str) -> int:
@@ -305,6 +342,11 @@ def parse_codex_rules(text: str, scope: str, source: str, salt: bytes) -> list[E
     source = safe_display(source)
     entries: list[Entry] = []
     position = 0
+    starts = {match.start() for match in _PREFIX_START.finditer(text)}
+    for token in _PREFIX_TOKEN.finditer(text):
+        if token.start() not in starts:
+            line = text.count("\n", 0, token.start()) + 1
+            raise ReceiptError(f"unsupported prefix_rule in {source}: line {line}")
     while match := _PREFIX_START.search(text, position):
         open_index = text.find("(", match.start())
         end = _call_end(text, open_index, source)
@@ -377,21 +419,24 @@ def scan_permissions(
         "<project>/.codex/rules/*.rules",
     ]
     claude_sources = (
-        (claude_home / "settings.json", "user", sources[0]),
-        (project_root / ".claude" / "settings.json", "project", sources[1]),
-        (project_root / ".claude" / "settings.local.json", "local", sources[2]),
+        (claude_home / "settings.json", claude_home, "user", sources[0]),
+        (project_root / ".claude" / "settings.json", project_root, "project", sources[1]),
+        (project_root / ".claude" / "settings.local.json", project_root, "local", sources[2]),
     )
-    for path, scope, label in claude_sources:
+    for path, anchor, scope, label in claude_sources:
+        _guard_source_path(path, anchor, label)
         if path.is_file():
             entries.extend(parse_claude_settings(_read_text(path, label), scope, label, fingerprint_salt))
 
     codex_sources = (
-        (codex_home / "rules", "user", sources[3]),
-        (project_root / ".codex" / "rules", "project", sources[4]),
+        (codex_home / "rules", codex_home, "user", sources[3]),
+        (project_root / ".codex" / "rules", project_root, "project", sources[4]),
     )
-    for directory, scope, label in codex_sources:
+    for directory, anchor, scope, label in codex_sources:
+        _guard_source_path(directory, anchor, label)
         for path in _rules_files(directory):
             file_label = label.replace("*.rules", path.name)
+            _guard_source_path(path, anchor, file_label)
             entries.extend(parse_codex_rules(_read_text(path, file_label), scope, file_label, fingerprint_salt))
 
     if len(entries) > MAX_RULES:
@@ -402,13 +447,13 @@ def scan_permissions(
 
 def write_snapshot(snapshot: Snapshot, path: Path, *, overwrite: bool = False) -> None:
     if path.exists() and not overwrite:
-        raise ReceiptError(f"receipt already exists: {path.name}; use --force to replace it")
+        raise ReceiptError(f"receipt already exists: {safe_display(path.name)}; use --force to replace it")
     if path.is_symlink():
         raise ReceiptError("refusing to write a receipt through a symlink")
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(snapshot.as_dict(), ensure_ascii=False, indent=2) + "\n"
     temporary: str | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
         ) as handle:
@@ -416,20 +461,27 @@ def write_snapshot(snapshot: Snapshot, path: Path, *, overwrite: bool = False) -
             handle.write(payload)
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
+    except OSError as exc:
+        raise ReceiptError(f"cannot write baseline receipt: {exc.__class__.__name__}") from exc
     finally:
         if temporary and os.path.exists(temporary):
-            os.unlink(temporary)
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def read_snapshot(path: Path) -> Snapshot:
     try:
+        if path.is_symlink():
+            raise ReceiptError("refusing to read a receipt through a symlink")
         if path.stat().st_size > MAX_RECEIPT_BYTES:
             raise ReceiptError("baseline receipt exceeds 4 MiB")
         data = json.loads(
             path.read_text(encoding="utf-8"), object_pairs_hook=_object_without_duplicates
         )
     except FileNotFoundError as exc:
-        raise ReceiptError(f"no baseline receipt at {path}") from exc
+        raise ReceiptError(f"no baseline receipt at {safe_display(str(path))}") from exc
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ReceiptError(f"cannot read baseline receipt: {exc.__class__.__name__}") from exc
     if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
@@ -437,14 +489,22 @@ def read_snapshot(path: Path) -> Snapshot:
     raw_entries = data.get("entries")
     raw_sources = data.get("sources_checked")
     salt = data.get("fingerprint_salt")
+    created_at = data.get("created_at")
+    try:
+        if isinstance(created_at, str):
+            datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        created_at = None
     if (
-        not isinstance(data.get("created_at"), str)
+        not isinstance(created_at, str)
         or not isinstance(salt, str)
         or not re.fullmatch(r"[0-9a-f]{32}", salt)
         or not isinstance(raw_entries, list)
         or not isinstance(raw_sources, list)
     ):
         raise ReceiptError("baseline receipt is incomplete")
+    if len(raw_entries) > MAX_RULES:
+        raise ReceiptError(f"baseline receipt contains more than {MAX_RULES} permission rules")
     if any(not isinstance(source, str) for source in raw_sources) or any(
         not isinstance(entry, dict) for entry in raw_entries
     ):
@@ -516,7 +576,7 @@ def render_markdown(report: Report) -> str:
     lines = [
         "## Permission Receipt",
         "",
-        f"Baseline `{html.escape(report.baseline_created_at)}` / checked `{html.escape(report.checked_at)}`",
+        f"Baseline <code>{html.escape(report.baseline_created_at)}</code> / checked <code>{html.escape(report.checked_at)}</code>",
         "",
         "> Persisted configuration diff only; this does not prove effective runtime authorization or which prompt button was used.",
         "",
@@ -530,8 +590,8 @@ def render_markdown(report: Report) -> str:
         for entry in entries:
             lines.append(
                 f"- `{marker}` **{entry.host} / {entry.scope} / {entry.kind}** - "
-                f"<code>{html.escape(entry.display)}</code> / `{html.escape(entry.source)}` / "
-                f"`{html.escape(entry.locator)}`"
+                f"<code>{html.escape(entry.display)}</code> / <code>{html.escape(entry.source)}</code> / "
+                f"<code>{html.escape(entry.locator)}</code>"
             )
         lines.append("")
     lines.append("Review added allow rules and removed restrictions first. Revoke by removing the shown entry from its source file.")

@@ -84,7 +84,8 @@ Claude Code merges permission arrays across scopes and applies other trust and p
 - No network calls, model calls, telemetry, or runtime dependencies.
 - Never reads transcripts, session history, auth data, `.env`, or `~/.claude.json`.
 - Never stores full permission rules. Baselines contain a random salt, salted fingerprints, coarse rule shapes, symbolic source labels, and locators.
-- Unknown or damaged JSON, unsupported `prefix_rule` syntax, unreadable files, symlinks, oversized inputs, and mid-read changes fail closed.
+- A baseline is neither encrypted nor signed. Its stored salt permits offline guessing of common rules, and a modified file can fabricate a comparison; keep it private and uncommitted.
+- Unknown or damaged JSON, unsupported `prefix_rule` syntax, unreadable files, redirected source paths, receipt-file symlinks, oversized inputs, and mid-read changes fail closed.
 - JSON and terminal output escape control characters and never include literal command patterns.
 - Baselines are atomically written and set to mode `0600` where POSIX permissions exist.
 

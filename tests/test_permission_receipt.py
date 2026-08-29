@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -159,6 +160,7 @@ prefix_rule(
             'prefix_rule(pattern=["git"], **{"decision":"allow"})',
             'prefix_rule(pattern=["git"], unknown="allow")',
             'prefix_rule(pattern=[])',
+            'prefix_rule pattern=["git"]',
         )
         with mock.patch("os.system", side_effect=AssertionError("must not execute")):
             for source in malicious:
@@ -179,6 +181,9 @@ prefix_rule(
         write_snapshot(snapshot, receipt, overwrite=True)
         if os.name != "nt":
             self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+        with mock.patch("tempfile.NamedTemporaryFile", side_effect=PermissionError):
+            with self.assertRaisesRegex(ReceiptError, "cannot write baseline receipt"):
+                write_snapshot(snapshot, self.root / "blocked.json")
 
     def test_bad_receipts_are_rejected(self) -> None:
         receipt = self.root / "bad.json"
@@ -190,6 +195,21 @@ prefix_rule(
             self.write(receipt, payload)
             with self.subTest(payload=payload), self.assertRaises(ReceiptError):
                 read_snapshot(receipt)
+
+        self.write(
+            receipt,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "created_at": "not-a-timestamp",
+                    "fingerprint_salt": SALT.hex(),
+                    "entries": [],
+                    "sources_checked": [],
+                }
+            ),
+        )
+        with self.assertRaisesRegex(ReceiptError, "incomplete"):
+            read_snapshot(receipt)
 
     def test_source_limits_and_partial_failures_are_fail_closed(self) -> None:
         settings = self.root / ".claude" / "settings.json"
@@ -219,6 +239,47 @@ prefix_rule(
         with self.assertRaisesRegex(ReceiptError, "symlink"):
             self.scan()
 
+    def test_redirected_project_ancestor_is_refused(self) -> None:
+        outside = self.root.parent / "outside-claude"
+        self.write(outside / "settings.json", '{"permissions":{"allow":["Read"]}}')
+        redirected = self.root / ".claude"
+        if os.name == "nt":
+            result = subprocess.run(
+                ["cmd", "/d", "/c", "mklink", "/J", str(redirected), str(outside)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                self.skipTest("junction creation is unavailable")
+            self.addCleanup(lambda: os.rmdir(redirected) if redirected.exists() else None)
+        else:
+            redirected.symlink_to(outside, target_is_directory=True)
+
+        with self.assertRaisesRegex(ReceiptError, "redirected source path"):
+            self.scan()
+
+    def test_symlink_receipts_and_default_directory_escape_are_refused_when_supported(self) -> None:
+        snapshot = self.scan()
+        outside = self.root.parent / "outside"
+        outside.mkdir()
+        target = outside / "baseline.json"
+        write_snapshot(snapshot, target)
+        receipt_link = self.root / "receipt-link.json"
+        default_directory = self.root / ".permission-receipt"
+        try:
+            receipt_link.symlink_to(target)
+            default_directory.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            self.skipTest("symlink creation is unavailable")
+
+        with self.assertRaisesRegex(ReceiptError, "symlink"):
+            read_snapshot(receipt_link)
+        with self.assertRaisesRegex(ReceiptError, "symlink"):
+            write_snapshot(snapshot, receipt_link, overwrite=True)
+        with self.assertRaisesRegex(ReceiptError, "outside the project"):
+            cli._receipt_path(self.root, None)
+
     def test_control_characters_cannot_inject_terminal_or_markdown(self) -> None:
         entries = parse_claude_settings(
             json.dumps({"permissions": {"allow": ["Bad\u001b[31m(<script>)"]}}),
@@ -233,6 +294,48 @@ prefix_rule(
         markdown = render_markdown(report)
         self.assertNotIn("\x1b", text)
         self.assertNotIn("<script>", markdown)
+
+    def test_modified_receipt_cannot_inject_controls_bidi_or_markdown(self) -> None:
+        receipt = self.root / "modified.json"
+        self.write(
+            receipt,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "created_at": "2026-08-30T01:00:00Z",
+                    "fingerprint_salt": SALT.hex(),
+                    "entries": [
+                        {
+                            "host": "claude",
+                            "scope": "user",
+                            "kind": "allow",
+                            "source": "`source\u001b\u202e</code><script>",
+                            "locator": "`locator\u2066",
+                            "rule": "`rule\u0007</code><script>",
+                            "fingerprint": "0" * 64,
+                        }
+                    ],
+                    "sources_checked": [],
+                },
+                ensure_ascii=False,
+            ),
+        )
+        baseline = read_snapshot(receipt)
+        current = type(baseline)(
+            "2026-08-30T01:01:00Z",
+            baseline.fingerprint_salt,
+            (),
+            baseline.sources_checked,
+        )
+        report = compare(baseline, current)
+        text = render_text(report)
+        markdown = render_markdown(report)
+        for rendered in (text, markdown):
+            self.assertNotIn("\x1b", rendered)
+            self.assertNotIn("\u202e", rendered)
+            self.assertNotIn("\u2066", rendered)
+        self.assertIn(r"\u202e", text)
+        self.assertNotIn("</code><script>", markdown)
 
     def test_demo_is_synthetic_and_deterministic(self) -> None:
         with mock.patch("permission_receipt.cli.scan_permissions", side_effect=AssertionError("demo read settings")):

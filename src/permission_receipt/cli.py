@@ -15,6 +15,7 @@ from .core import (
     read_snapshot,
     render_markdown,
     render_text,
+    safe_display,
     scan_permissions,
     write_snapshot,
 )
@@ -35,12 +36,19 @@ def _project_root(start: Path) -> Path:
 def _root(value: str | None) -> Path:
     path = Path(value or ".").expanduser()
     if not path.is_dir():
-        raise ReceiptError(f"project root is not a directory: {path}")
+        raise ReceiptError(f"project root is not a directory: {safe_display(str(path))}")
     return _project_root(path)
 
 
 def _receipt_path(root: Path, value: str | None) -> Path:
-    return Path(value).expanduser().resolve() if value else root / ".permission-receipt" / "baseline.json"
+    if value:
+        return Path(value).expanduser().absolute()
+    path = root / ".permission-receipt" / "baseline.json"
+    try:
+        path.parent.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise ReceiptError("default receipt directory resolves outside the project") from exc
+    return path
 
 
 def _render(report: object, output_format: str) -> str:
@@ -90,7 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.json:
                 print(json.dumps(snapshot.as_dict(), ensure_ascii=False, indent=2))
             else:
-                print(f"Baseline saved: {receipt_path}")
+                print(f"Baseline saved: {safe_display(str(receipt_path))}")
                 print(f"Persisted permission rules: {len(snapshot.entries)}")
                 print("Only redacted permission data and fingerprints were stored.")
             return 0

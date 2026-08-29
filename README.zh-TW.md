@@ -27,7 +27,7 @@ permission-receipt demo --format json
 - Claude Code：user、project、local 三個 scope 的 `settings.json`，且只取 `permissions.allow`、`ask`、`deny`。
 - Codex：user 與 project 的 `rules/*.rules`，且只接受可安全解析的 literal `prefix_rule(...)`。
 
-它不讀 transcript、session history、auth、`.env`、`~/.claude.json` 或其他 settings 欄位；也不把完整 command/specifier 存進 baseline。baseline 只保存隨機 salt、salted fingerprint、規則粗略形狀、symbolic source 與定位。
+它不讀 transcript、session history、auth、`.env`、`~/.claude.json` 或其他 settings 欄位；也不把完整 command/specifier 存進 baseline。baseline 只保存隨機 salt、salted fingerprint、規則粗略形狀、symbolic source 與定位。baseline 不是加密或簽章檔；保存的 salt 仍可能被用來離線猜測常見規則，檔案遭修改也能偽造比較結果，所以必須保持私密且不要 commit。
 
 ## 誠實邊界
 
