@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "permission-receipt"
 version = "0.1.0"
-description = "See what Claude Code or Codex remembered when you clicked allow."
+description = "Receipts for persisted Claude Code and Codex permission-rule changes."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
