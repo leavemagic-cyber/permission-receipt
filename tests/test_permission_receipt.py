@@ -70,6 +70,7 @@ class PermissionReceiptTests(unittest.TestCase):
             json.dumps(
                 {
                     "permissions": {"allow": [f"Bash(curl --token {SECRET})"]},
+                    "extra_permissions": [f"mcp__private_customer__deploy({SECRET})"],
                     "env": {"IGNORED_SECRET": SECRET},
                 }
             ),
@@ -98,6 +99,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         serialized = json.dumps(snapshot.as_dict(), ensure_ascii=False)
         self.assertNotIn(SECRET, serialized)
         self.assertNotIn("cargo", serialized)
+        self.assertNotIn("private_customer", serialized)
         self.assertNotIn(str(self.home), serialized)
         self.assertIn("<details withheld>", serialized)
         self.assertEqual(
@@ -161,11 +163,50 @@ prefix_rule(
             'prefix_rule(pattern=["git"], unknown="allow")',
             'prefix_rule(pattern=[])',
             'prefix_rule pattern=["git"]',
+            'prefix_rule(pattern=["git"], pattern=["gh"])',
+            'prefix_rule(pattern=("git", "status"))',
+            'prefix_rule(pattern=[["git", ["status"]]])',
+            'x = prefix_rule(pattern=["git"])',
+            'prefix_rule(pattern=["git"]); prefix_rule(pattern=["gh"])',
         )
         with mock.patch("os.system", side_effect=AssertionError("must not execute")):
             for source in malicious:
                 with self.subTest(source=source), self.assertRaises(ReceiptError):
                     parse_codex_rules(source, "user", "<codex-user>/rules/default.rules", SALT)
+
+        ignored_tokens = '''
+# prefix_rule(pattern=["comment"])
+note = "prefix_rule(pattern=['string'])"
+doc = """prefix_rule(pattern=["triple-string"])"""
+'''
+        self.assertEqual(
+            parse_codex_rules(ignored_tokens, "user", "<codex-user>/rules/default.rules", SALT),
+            [],
+        )
+
+    def test_custom_claude_tool_names_are_withheld(self) -> None:
+        entries = parse_claude_settings(
+            json.dumps(
+                {
+                    "permissions": {
+                        "allow": [
+                            "mcp__private_customer__deploy(secret)",
+                            "InternalDeploy(prod-host)",
+                            "Bash(git status)",
+                        ]
+                    }
+                }
+            ),
+            "user",
+            "<user>/settings.json",
+            SALT,
+        )
+        displays = [entry.display for entry in entries]
+        self.assertEqual(
+            displays,
+            ["MCP(<details withheld>)", "<permission rule details withheld>", "Bash(<details withheld>)"],
+        )
+        self.assertNotIn("private_customer", json.dumps([entry.as_dict() for entry in entries]))
 
     def test_snapshot_is_private_atomic_and_guarded(self) -> None:
         settings = self.root / ".claude" / "settings.json"

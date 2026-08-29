@@ -65,7 +65,7 @@ permission-receipt demo --format json
 
 ## What it observes
 
-Only these documented permission surfaces are read:
+Only these documented permission values are extracted. Claude's containing JSON settings files are parsed as a whole, but unrelated fields are discarded before snapshot serialization:
 
 | Host | Scope | Source | Data |
 |---|---|---|---|
@@ -83,6 +83,7 @@ Claude Code merges permission arrays across scopes and applies other trust and p
 
 - No network calls, model calls, telemetry, or runtime dependencies.
 - Never reads transcripts, session history, auth data, `.env`, or `~/.claude.json`.
+- Parses each selected Claude settings file as a whole, then ignores unrelated fields; those fields are never copied into the baseline or report.
 - Never stores full permission rules. Baselines contain a random salt, salted fingerprints, coarse rule shapes, symbolic source labels, and locators.
 - A baseline is neither encrypted nor signed. Its stored salt permits offline guessing of common rules, and a modified file can fabricate a comparison; keep it private and uncommitted.
 - Unknown or damaged JSON, unsupported `prefix_rule` syntax, unreadable files, redirected source paths, receipt-file symlinks, oversized inputs, and mid-read changes fail closed.

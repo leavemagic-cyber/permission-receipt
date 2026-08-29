@@ -4,11 +4,13 @@ import ast
 import hashlib
 import hmac
 import html
+import io
 import json
 import os
 import re
 import secrets
 import tempfile
+import tokenize
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
@@ -22,6 +24,18 @@ MAX_SOURCE_BYTES = 1_048_576
 MAX_RECEIPT_BYTES = 4_194_304
 MAX_RULES = 1_000
 _WINDOWS_REPARSE_POINT = 0x400
+_PUBLIC_CLAUDE_TOOLS = {
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "Read",
+    "Task",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+}
 
 
 class ReceiptError(Exception):
@@ -228,7 +242,12 @@ def _read_text(path: Path, label: str) -> str:
             raise ReceiptError(f"source exceeds 1 MiB: {label}")
         payload = path.read_bytes()
         after = path.stat()
-        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
             raise ReceiptError(f"source changed while reading: {label}")
         return payload.decode("utf-8-sig")
     except (OSError, UnicodeError) as exc:
@@ -249,6 +268,10 @@ def _claude_shape(rule: str) -> str:
     if not match:
         return "<permission rule details withheld>"
     tool = safe_display(match.group(1), limit=80)
+    if tool.startswith("mcp__"):
+        return "MCP(<details withheld>)"
+    if tool not in _PUBLIC_CLAUDE_TOOLS:
+        return "<permission rule details withheld>"
     return tool if "(" not in rule else f"{tool}(<details withheld>)"
 
 
@@ -287,7 +310,22 @@ def parse_claude_settings(text: str, scope: str, source: str, salt: bytes) -> li
 
 
 _PREFIX_START = re.compile(r"(?m)^[ \t]*prefix_rule[ \t]*\(")
-_PREFIX_TOKEN = re.compile(r"(?m)^[ \t]*prefix_rule\b")
+
+
+def _prefix_token_offsets(text: str, source: str) -> set[int]:
+    line_offsets = [0]
+    for match in re.finditer("\n", text):
+        line_offsets.append(match.end())
+    offsets: set[int] = set()
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+        for token in tokens:
+            if token.type == tokenize.NAME and token.string == "prefix_rule":
+                row, column = token.start
+                offsets.add(line_offsets[row - 1] + column)
+    except (IndentationError, tokenize.TokenError) as exc:
+        raise ReceiptError(f"cannot tokenize rules in {source}: {exc.__class__.__name__}") from exc
+    return offsets
 
 
 def _call_end(text: str, open_index: int, source: str) -> int:
@@ -323,11 +361,17 @@ def _call_end(text: str, open_index: int, source: str) -> int:
 
 
 def _validate_pattern(value: object, source: str) -> object:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (list, tuple)):
-        return [_validate_pattern(item, source) for item in value]
-    raise ReceiptError(f"non-literal prefix_rule pattern in {source}")
+    if not isinstance(value, list) or not value:
+        raise ReceiptError(f"prefix_rule pattern must be a non-empty list in {source}")
+    result: list[object] = []
+    for item in value:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, list) and item and all(isinstance(option, str) for option in item):
+            result.append(item)
+        else:
+            raise ReceiptError(f"non-literal prefix_rule pattern in {source}")
+    return result
 
 
 def _pattern_shape(pattern: list[object]) -> str:
@@ -342,10 +386,11 @@ def parse_codex_rules(text: str, scope: str, source: str, salt: bytes) -> list[E
     source = safe_display(source)
     entries: list[Entry] = []
     position = 0
-    starts = {match.start() for match in _PREFIX_START.finditer(text)}
-    for token in _PREFIX_TOKEN.finditer(text):
-        if token.start() not in starts:
-            line = text.count("\n", 0, token.start()) + 1
+    matches = tuple(_PREFIX_START.finditer(text))
+    starts = {match.start() + match.group().index("prefix_rule") for match in matches}
+    for offset in _prefix_token_offsets(text, source):
+        if offset not in starts:
+            line = text.count("\n", 0, offset) + 1
             raise ReceiptError(f"unsupported prefix_rule in {source}: line {line}")
     while match := _PREFIX_START.search(text, position):
         open_index = text.find("(", match.start())
@@ -359,7 +404,8 @@ def parse_codex_rules(text: str, scope: str, source: str, salt: bytes) -> list[E
             if node.args or any(keyword.arg is None for keyword in node.keywords):
                 raise ValueError
             allowed = {"pattern", "decision", "justification", "match", "not_match"}
-            if any(keyword.arg not in allowed for keyword in node.keywords):
+            names = [keyword.arg for keyword in node.keywords]
+            if any(name not in allowed for name in names) or len(names) != len(set(names)):
                 raise ValueError
             values = {keyword.arg: ast.literal_eval(keyword.value) for keyword in node.keywords}
             pattern = _validate_pattern(values["pattern"], source)
@@ -367,8 +413,6 @@ def parse_codex_rules(text: str, scope: str, source: str, salt: bytes) -> list[E
         except (KeyError, ValueError, SyntaxError) as exc:
             line = text.count("\n", 0, match.start()) + 1
             raise ReceiptError(f"unsupported prefix_rule in {source}: line {line}") from exc
-        if not isinstance(pattern, list) or not pattern:
-            raise ReceiptError(f"prefix_rule pattern must be a non-empty list in {source}")
         if decision not in {"allow", "prompt", "forbidden"}:
             raise ReceiptError(f"invalid prefix_rule decision in {source}: {decision!r}")
         kind = {"allow": "allow", "prompt": "ask", "forbidden": "deny"}[str(decision)]
@@ -568,7 +612,7 @@ def render_text(report: Report) -> str:
                 ]
             )
         lines.append("")
-    lines.append("Review added allow rules and removed restrictions first. Revoke by removing the shown entry from its source file.")
+    lines.append("Review added allow rules and removed restrictions first. To change a current rule, inspect its source; locators identify the scanned snapshot.")
     return "\n".join(lines)
 
 
@@ -594,7 +638,7 @@ def render_markdown(report: Report) -> str:
                 f"<code>{html.escape(entry.locator)}</code>"
             )
         lines.append("")
-    lines.append("Review added allow rules and removed restrictions first. Revoke by removing the shown entry from its source file.")
+    lines.append("Review added allow rules and removed restrictions first. To change a current rule, inspect its source; locators identify the scanned snapshot.")
     return "\n".join(lines)
 
 
