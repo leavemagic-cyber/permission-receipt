@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "permission-receipt"
+version = "0.1.0"
+description = "See what Claude Code or Codex remembered when you clicked allow."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "leavemagic-cyber" }]
+keywords = ["claude-code", "codex", "permissions", "security", "audit"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Security",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.scripts]
+permission-receipt = "permission_receipt.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/permission_receipt"]
