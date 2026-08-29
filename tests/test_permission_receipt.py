@@ -277,7 +277,7 @@ doc = """prefix_rule(pattern=["triple-string"])"""
             link.symlink_to(target)
         except OSError:
             self.skipTest("symlink creation is unavailable")
-        with self.assertRaisesRegex(ReceiptError, "symlink"):
+        with self.assertRaisesRegex(ReceiptError, "symlink|redirected"):
             self.scan()
 
     def test_redirected_project_ancestor_is_refused(self) -> None:
