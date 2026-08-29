@@ -8,3 +8,4 @@ All notable changes are documented here.
 - Add literal-only parsing for Codex `prefix_rule(...)` files.
 - Add text, Markdown, and JSON reports with symbolic sources and locators.
 - Add fail-closed input limits, atomic private baselines, and a fully synthetic demo.
+- Reject redirected source ancestors, escape terminal/Markdown control characters, and validate receipt structure before comparison.

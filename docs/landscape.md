@@ -17,15 +17,18 @@ The repository was launched only after checking whether GitHub already had a sub
 |---|---:|---|---|
 | [Mearman/agent-permissions](https://github.com/Mearman/agent-permissions) | 2 | Cross-agent canonical permission policy, sync, CLI, and evaluator | Manages and synchronizes policy; does not issue a before/after cross-host disk-rule receipt |
 | [tantk/permission-hook](https://github.com/tantk/permission-hook) | 4 | Fast Claude-oriented runtime allow/deny/ask hook and recent-prompt data | Evaluates permission requests; does not compare persisted Claude/Codex rule sources |
+| [selfradiance/reapproval-gate](https://github.com/selfradiance/reapproval-gate) | 0 | Checks a proposed action against an approved scope before execution | Produces pre-action reapproval decisions; does not snapshot agent permission files |
 | [disler/claude-code-hooks-mastery](https://github.com/disler/claude-code-hooks-mastery) | 3,907 | Broad Claude Code hook examples and education | General hook library, not this receipt product |
 
 Stars and activity are current observations, not adoption guarantees. Search coverage is not proof that no equivalent repository exists.
 
-## Upstream gap evidence
+## Upstream gap reports
 
-- [anthropics/claude-code#40634](https://github.com/anthropics/claude-code/issues/40634): available hook/log surfaces do not capture the final approval method after settings evaluation.
-- [openai/codex#27157](https://github.com/openai/codex/issues/27157): users can persist prefix approvals but lack an in-app way to review or remove them.
-- [openai/codex#29145](https://github.com/openai/codex/issues/29145): current persisted execpolicy amendments are generally user-global, while project-local authoring requires manual work.
+- [anthropics/claude-code#40634](https://github.com/anthropics/claude-code/issues/40634): a user reported that available hook/log surfaces did not capture the final approval method after settings evaluation. The issue was automatically closed for inactivity on 2026-05-02, not as a documented product fix.
+- The open [openai/codex#27157](https://github.com/openai/codex/issues/27157) reports that persisted prefix approvals lack an in-app review/remove surface.
+- The open [openai/codex#29145](https://github.com/openai/codex/issues/29145) reports that interactive execpolicy amendments are generally saved at user scope while project-local authoring is manual.
+
+These are user reports and demand signals, not authoritative proof of current product behavior. The scanner boundary itself follows the hosts' current settings/rules documentation and source.
 
 ## Positioning decision
 

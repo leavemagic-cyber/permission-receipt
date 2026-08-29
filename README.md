@@ -119,12 +119,12 @@ The default baseline is `<project>/.permission-receipt/baseline.json`. `baseline
 
 ## Why this exists
 
-The gap is visible in both upstream trackers:
+Users have reported the gap in both upstream trackers:
 
-- [Claude Code #40634](https://github.com/anthropics/claude-code/issues/40634) documents that the final manual-vs-rule approval method is not captured in available audit logs.
-- [Codex #27157](https://github.com/openai/codex/issues/27157) documents that persisted command-approval rules lack an in-app review/remove surface and must be hand-edited.
+- In [Claude Code #40634](https://github.com/anthropics/claude-code/issues/40634), a user reported that available logs did not capture the final manual-vs-rule approval method. The issue was later closed automatically for inactivity, not as a documented product fix.
+- In the open [Codex #27157](https://github.com/openai/codex/issues/27157), a user reports that persisted command-approval rules lack an in-app review/remove surface and must be hand-edited.
 
-Permission Receipt does not pretend to reconstruct unavailable approval events. It solves the smaller, verifiable problem both hosts expose: **what persisted rule data changed on disk?**
+Permission Receipt does not pretend to reconstruct approval events. It solves the smaller, verifiable problem: **what persisted rule data changed on disk?**
 
 The current competitive scan and positioning are in [docs/landscape.md](docs/landscape.md).
 
