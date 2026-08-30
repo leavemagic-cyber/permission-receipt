@@ -1,5 +1,7 @@
 # permission-receipt
 
+English | [繁體中文](README.zh-TW.md)
+
 **Every “always allow” should leave a receipt.**
 
 See which persisted Claude Code and Codex permission rules appeared or disappeared between two moments. Local-only, deterministic, and runtime dependency-free.
@@ -138,8 +140,6 @@ permission-receipt demo --format json
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for fixture and claim rules. Security issues belong in [private vulnerability reports](https://github.com/leavemagic-cyber/permission-receipt/security/advisories/new), not public issues.
-
-Traditional Chinese: [README.zh-TW.md](README.zh-TW.md)
 
 ## License
 
